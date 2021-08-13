@@ -47,6 +47,12 @@ class Collective:
         else:
             return None
 
+    def pre_on(self, chunk):
+        return self._chunks[chunk].precondition
+
+    def post_on(self, chunk):
+        return self._chunks[chunk].postcondition
+
     def has_triggers(self):
         return len(self._triggers) > 0
 
@@ -66,6 +72,10 @@ class Collective:
 
         name = f'{self.name},chunks={div}'
         return Collective(name, self.num_nodes, new_chunks)
+
+    def __str__(self):
+        collstr = "{}\n \t num_nodes: {}\n \t num_chunks: {}".format(self.name, self.num_nodes, self.num_chunks)
+        return collstr
 
 def build_collective(name, num_nodes, num_chunks, precondition, postcondition, address = lambda c: c, trigger = lambda r, c: None):
     chunks = []

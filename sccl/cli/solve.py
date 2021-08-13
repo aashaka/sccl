@@ -2,8 +2,10 @@
 # Licensed under the MIT License.
 
 import sccl.strategies as strategies
+import os
 from .known_topologies import KnownTopologies
 from .known_collectives import KnownCollectives
+from sccl.topologies.distributed import distributed_relayed, distributed_fully_connected, distributed_relayed_switch
 from .common import *
 
 def make_solvers(cmd_parsers):
@@ -12,7 +14,9 @@ def make_solvers(cmd_parsers):
     handler_funcs.append(make_handle_solve_least_steps)
     handler_funcs.append(make_handle_solve_pareto_optimal)
     handler_funcs.append(make_handle_solve_uflra)
-
+    handler_funcs.append(make_handle_solve_gurobi_simple)
+    handler_funcs.append(make_handle_solve_improve_encoding)
+    handler_funcs.append(make_handle_solve_checksol_encoding)
     return make_cmd_category(cmd_parsers, 'solve', 'solver', handler_funcs)
 
 def _make_handle_strategy(cmd_parsers, name, invoke, take_steps = True):
@@ -107,6 +111,139 @@ def make_handle_solve_uflra(cmd_parsers):
         topology = topologies.create(args)
         collective = collectives.create(args, topology.num_nodes())
         strategies.optimize(topology, collective, strategies.Optimizer.UFLRA)
+        return True
+
+    return handle
+
+def make_handle_solve_gurobi_simple(cmd_parsers):
+    name = 'gurobi_simple'
+    cmd = cmd_parsers.add_parser(name)
+    topologies = KnownTopologies(cmd)
+    collectives = KnownCollectives(cmd)
+    # validate_output_args, output_handler = add_output_sccl_objects(cmd)
+
+    def handle(args, command):
+        if command != name:
+            return False
+
+        # validate_output_args(args)
+        topology = topologies.create(args)
+        # topology = distributed_relayed(topology, 2, 0.5)
+        # topology = distributed_fully_connected(topology, 2, 0.5)
+        collective = collectives.create(args, topology.num_nodes())
+        strategies.optimize(topology, collective, strategies.Optimizer.GUROBI_S)
+        return True
+
+    return handle
+
+def make_handle_solve_improve_encoding(cmd_parsers):
+    name = 'improve'
+    cmd = cmd_parsers.add_parser(name)
+    topologies = KnownTopologies(cmd)
+    collectives = KnownCollectives(cmd)
+    validate_output_args, output_handler = add_output_sccl_objects(cmd)
+    cmd.add_argument('--copies', type=int, default=1, metavar='N')
+    cmd.add_argument('--chunkup', type=int, default=1, metavar='N')
+    cmd.add_argument('--heuristic', type=int, default=1, metavar='N')
+    cmd.add_argument('--use-relay', action='store_true', help='distributed relayed')
+    cmd.add_argument('--use-relay-switch', action='store_true', help='distributed relayed switch')
+    cmd.add_argument('--use-fc', action='store_true', help='distributed fully connected')
+    cmd.add_argument('--type', type=str, help='type')
+
+    def handle(args, command):
+        if command != name:
+            return False
+
+        validate_output_args(args)
+        topology = topologies.create(args)
+        if args.use_relay_switch:
+            assert not args.use_fc
+            assert not args.use_relay
+            assert args.copies > 1
+            if "DGX1" in topology.name:
+                topology = distributed_relayed_switch(topology, args.copies)
+            elif "DGX2" in topology.name:
+                if "DGX2Single" in topology.name:
+                    print("dgx2single")
+                    topology = distributed_relayed_switch(topology, args.copies, relays=[list(range(16)),list(range(16))])
+                else:
+                    topology = distributed_relayed_switch(topology, args.copies, relays=[list(range(16)),list(range(16))])
+            elif "A100" in topology.name:
+                topology = distributed_relayed_switch(topology, args.copies, relays=[list(range(16)),list(range(16))])
+            else:
+                assert False, f"Architecture not Added {topology.name}"
+        elif args.use_relay:
+            assert not args.use_fc
+            assert not args.use_relay_switch
+            assert args.copies > 1
+            topology = distributed_relayed(topology, args.copies)
+        elif args.use_fc:
+            assert not args.use_relay_switch
+            assert not args.use_relay
+            assert args.copies > 1
+            topology = distributed_fully_connected(topology, args.copies)
+        else:
+            assert args.copies == 1
+
+        collective = collectives.create(args, topology.num_nodes())
+        algo = strategies.optimize(topology, collective, strategies.Optimizer.IMPROVE, chunkup=args.chunkup, heuristic=args.heuristic, type=args.type)
+        output_handler(args, algo, algo.name + "_gurobisol_improve")
+        return True
+
+    return handle
+
+def make_handle_solve_checksol_encoding(cmd_parsers):
+    name = 'checksol'
+    cmd = cmd_parsers.add_parser(name)
+    topologies = KnownTopologies(cmd)
+    collectives = KnownCollectives(cmd)
+    validate_output_args, output_handler = add_output_sccl_objects(cmd)
+    cmd.add_argument('--ts', type=str, help='timestamp of send_dict')
+    cmd.add_argument('--copies', type=int, default=1, metavar='N')
+    cmd.add_argument('--chunkup', type=int, default=1, metavar='N')
+    cmd.add_argument('--use-relay', action='store_true', help='distributed relayed')
+    cmd.add_argument('--use-relay-switch', action='store_true', help='distributed relayed switch')
+    cmd.add_argument('--use-fc', action='store_true', help='distributed fully connected')
+    cmd.add_argument('--type', type=str, help='type')
+    def handle(args, command):
+        if command != name:
+            return False
+
+        validate_output_args(args)
+        topology = topologies.create(args)
+
+        if args.use_relay_switch:
+            assert not args.use_fc
+            assert not args.use_relay
+            assert args.copies > 1
+            if "DGX1" in topology.name:
+                topology = distributed_relayed_switch(topology, args.copies)
+            elif "DGX2" in topology.name:
+                if "DGX2Single" in topology.name:
+                    print("dgx2single")
+                    topology = distributed_relayed_switch(topology, args.copies, relays=[list(range(16)),list(range(16))])
+                else:
+                    topology = distributed_relayed_switch(topology, args.copies, relays=[list(range(16)),list(range(16))])
+            elif "A100" in topology.name:
+                topology = distributed_relayed_switch(topology, args.copies, relays=[list(range(16)),list(range(16))])
+            else:
+                assert False, f"Architecture not Added {topology.name}"
+        elif args.use_relay:
+            assert not args.use_fc
+            assert not args.use_relay_switch
+            assert args.copies > 1
+            topology = distributed_relayed(topology, args.copies)
+        elif args.use_fc:
+            assert not args.use_relay_switch
+            assert not args.use_relay
+            assert args.copies > 1
+            topology = distributed_fully_connected(topology, args.copies)
+        else:
+            assert args.copies == 1
+
+        collective = collectives.create(args, topology.num_nodes())
+        algo = strategies.optimize(topology, collective, strategies.Optimizer.CHECK_SOL, chunkup=args.chunkup, ts=args.ts)
+        output_handler(args, algo, algo.name + "_gurobisol_improve")
         return True
 
     return handle

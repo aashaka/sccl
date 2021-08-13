@@ -1,6 +1,9 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+from sccl.gurobi_optimizer_e import GurobiOptimizerE
+from sccl.gurobi_simple import GurobiOptimizerSimple
+# from sccl.quick_round_maybe import LogicalRoundOptimizer
 from sccl.instance import Instance
 from sccl.path_encoding import PathEncoding
 from sccl.uflra_optimizer import UflraOptimizer
@@ -162,14 +165,31 @@ def prune_pareto_optimal(algorithms):
 
 class Optimizer(Enum):
     UFLRA = 'UFLRA'
+    GUROBI_S = 'GUROBI_S'
+    IMPROVE = 'IMPROVE'
+    CHECK_SOL = 'CHECK_SOL'
 
     def __str__(self):
         return self.value
 
-def optimize(topology, collective, optimizer):
+def optimize(topology, collective, optimizer, chunkup=1, heuristic=3, type="e", ts=""):
     if optimizer == Optimizer.UFLRA:
         opt = UflraOptimizer(topology, collective)
-    start_time = time.time()
+    elif optimizer == Optimizer.GUROBI_S:
+        opt = GurobiOptimizerSimple(topology, collective)
+        cont_algo = opt.optimize(chunkup=chunkup)
+        return
+    elif optimizer == Optimizer.IMPROVE:
+        print("Setting chunkup =", chunkup)
+        opt = GurobiOptimizerSimple(topology, collective)
+        time_recv, chunk_recv, switch_time_recv, switch_chunk_recv, switch_time_send, switch_chunk_send, nic_time_recv, nic_chunk_recv, nic_time_send, nic_chunk_send = opt.optimize(chunkup, heuristic=heuristic)
+        opt_1 = GurobiOptimizerE(topology, collective)
+        cont_algo = opt_1.optimize(chunkup, chunk_recv, time_recv, switch_chunk_recv, switch_time_recv, switch_chunk_send, switch_time_send, nic_chunk_recv, nic_time_recv, nic_chunk_send, nic_time_send, heuristic=heuristic)
+        return cont_algo
+    elif optimizer == Optimizer.CHECK_SOL:
+        print("Setting chunkup =", chunkup)
+        opt_1 = GurobiOptimizerE(topology, collective)
+        cont_algo = opt_1.check_sol(chunkup, ts=ts)
+        return cont_algo
+
     cont_algo = opt.optimize()
-    duration = time.time() - start_time
-    print(f'Duration {duration:.1f}s')
