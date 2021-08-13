@@ -11,7 +11,7 @@ class Step(object):
     sends: list
 
 class Algorithm(object):
-    def __init__(self, name, collective, topology, instance, steps, input_map = {}, output_map = {}):
+    def __init__(self, name, collective, topology, instance, steps, cont=False, input_map = {}, output_map = {}):
         self.name = name
         self.topology = topology
         self.collective = collective
@@ -19,16 +19,19 @@ class Algorithm(object):
         self.steps = steps
         self.input_map = input_map
         self.output_map = output_map
+        self.cont = cont
 
         self._update_link_utilizations()
-        # self._check_bandwidth_constraints()
-        self._check_real_bandwidth_constraints()
+        if not cont:
+            self._check_bandwidth_constraints()
+        else:
+            self._check_real_bandwidth_constraints()
 
         for step in self.steps:
             step.sends.sort()
 
     @classmethod
-    def make_implementation(cls, collective, topology, instance, steps, suffix=""):
+    def make_implementation(cls, collective, topology, instance, steps, cont=False, suffix=""):
         chunked = collective.chunk_up(instance.chunks)
 
         # Figure out input and output addresses
@@ -52,7 +55,7 @@ class Algorithm(object):
         # Concatenate collective and topology names plus instance arguments to create a name
         name = f'{collective.name}-{topology.name}-{instance}{suffix}'
 
-        algo = cls(name, collective, topology, instance, steps, input_map, output_map)
+        algo = cls(name, collective, topology, instance, steps, cont, input_map, output_map)
         algo.check_implements(chunked)
         if instance.extra_rounds > 0:
             used_extra_rounds = algo.extra_rounds()

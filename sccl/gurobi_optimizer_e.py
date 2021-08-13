@@ -744,7 +744,7 @@ class GurobiOptimizerE(object):
         from time import time
         timestamp = int(time())
         np.save(f'send_dict_{timestamp}.npy', send_dict)
-        return Algorithm.make_implementation(self.collective_og, self.topology, instance, steps, f'-gurobisol-{soltype}-{timestamp}')
+        return Algorithm.make_implementation(self.collective_og, self.topology, instance, steps, cont=True, suffix=f'-gurobisol-{soltype}-{timestamp}')
 
 
     def check_sol(self, num_chunks_per_node=1,ts=""):
