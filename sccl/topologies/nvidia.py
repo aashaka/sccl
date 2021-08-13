@@ -6,23 +6,54 @@ from .topology import Topology
 from fractions import Fraction
 import subprocess
 
+# DGX1 config assuming 1MB data transfer size
 def dgx1():
     # (0 1 2 3) (4 5 6 7) are two sockets
     # 0 1 3 2 is the high bandwidth chain in socket 1
     # 4 5 7 6 is the high bandwidth chain in socket 2
-    # 0 4 and 2 6 are high bandwidth intersocket links  
+    # 0 4 and 2 6 are high bandwidth intersocket links
 
+    # links = [
+    #     #0  1  2  3  4  5  6  7
+    #     [0, 2, 1, 1, 2, 0, 0, 0],
+    #     [2, 0, 1, 2, 0, 1, 0, 0],
+    #     [1, 1, 0, 2, 0, 0, 2, 0],
+    #     [1, 2, 2, 0, 0, 0, 0, 1],
+    #     [2, 0, 0, 0, 0, 2, 1, 1],
+    #     [0, 1, 0, 0, 2, 0, 1, 2],
+    #     [0, 0, 2, 0, 1, 1, 0, 2],
+    #     [0, 0, 0, 1, 1, 2, 2, 0]
+    # ]
+
+    # Link connection matrix
     links = [
         #0  1  2  3  4  5  6  7
-        [0, 2, 1, 1, 2, 0, 0, 0],
-        [2, 0, 1, 2, 0, 1, 0, 0],
-        [1, 1, 0, 2, 0, 0, 2, 0],
-        [1, 2, 2, 0, 0, 0, 0, 1],
-        [2, 0, 0, 0, 0, 2, 1, 1],
-        [0, 1, 0, 0, 2, 0, 1, 2],
-        [0, 0, 2, 0, 1, 1, 0, 2],
-        [0, 0, 0, 1, 1, 2, 2, 0]
+        [0, 1, 1, 1, 1, 0, 0, 0],
+        [1, 0, 1, 1, 0, 1, 0, 0],
+        [1, 1, 0, 1, 0, 0, 1, 0],
+        [1, 1, 1, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 1, 1, 1],
+        [0, 1, 0, 0, 1, 0, 1, 1],
+        [0, 0, 1, 0, 1, 1, 0, 1],
+        [0, 0, 0, 1, 1, 1, 1, 0]
     ]
+
+    # NVLink bandwidth for each link
+    # high bandwidth link => alpha=0, beta=23/46
+    invbws = [
+        [0, 23, 46, 46, 23, 0, 0, 0],
+        [23, 0, 46, 23, 0, 46, 0, 0],
+        [46, 46, 0, 23, 0, 0, 23, 0],
+        [46, 23, 23, 0, 0, 0, 0, 46],
+        [23, 0, 0, 0, 0, 23, 46, 46],
+        [0, 46, 0, 0, 23, 0, 46, 23],
+        [0, 0, 23, 0, 46, 46, 0, 23],
+        [0, 0, 0, 46, 46, 23, 23, 0]
+    ]
+
+    remote_invbw = 107  # approx IB alpha + beta = 2 + 105
+    remote_alpha = 2.6  # IB alpha = 2.6
+    remote_beta = 105   # IB beta = 105
 
     # self.symmetries = [
     #     [0, 1, 2, 3, 4, 5, 6, 7], #0 goes to itself
@@ -38,7 +69,46 @@ def dgx1():
     # self.beta_bound = Fraction(7,6)
     # self.diameter = 2
 
-    return Topology('DGX1', links)
+    return Topology('DGX1', links, invbws=invbws, remote_invbw=remote_invbw, remote_alpha=remote_alpha, remote_beta=remote_beta)
+
+# DGX1 config with high link latency
+def dgx1_lat():
+    # (0 1 2 3) (4 5 6 7) are two sockets
+    # 0 1 3 2 is the high bandwidth chain in socket 1
+    # 4 5 7 6 is the high bandwidth chain in socket 2
+    # 0 4 and 2 6 are high bandwidth intersocket links
+
+    # Link connection matrix
+    links = [
+        #0  1  2  3  4  5  6  7
+        [0, 1, 1, 1, 1, 0, 0, 0],
+        [1, 0, 1, 1, 0, 1, 0, 0],
+        [1, 1, 0, 1, 0, 0, 1, 0],
+        [1, 1, 1, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 1, 1, 1],
+        [0, 1, 0, 0, 1, 0, 1, 1],
+        [0, 0, 1, 0, 1, 1, 0, 1],
+        [0, 0, 0, 1, 1, 1, 1, 0]
+    ]
+
+    # NVLink bandwidth for each link
+    # high latency link => alpha=0.3, beta=0
+    invbws = [
+        [0, 0.3, 0.3, 0.3, 0.3, 0, 0, 0],
+        [0.3, 0, 0.3, 0.3, 0, 0.3, 0, 0],
+        [0.3, 0.3, 0, 0.3, 0, 0, 0.3, 0],
+        [0.3, 0.3, 0.3, 0, 0, 0, 0, 0.3],
+        [0.3, 0, 0, 0, 0, 0.3, 0.3, 0.3],
+        [0, 0.3, 0, 0, 0.3, 0, 0.3, 0.3],
+        [0, 0, 0.3, 0, 0.3, 0.3, 0, 0.3],
+        [0, 0, 0, 0.3, 0.3, 0.3, 0.3, 0]
+    ]
+
+    remote_invbw = 3    # IB alpha + beta = 3 + 0
+    remote_alpha = 3    # IB alpha = 3
+    remote_beta = 0     # IB beta = 0
+
+    return Topology('DGX1Lat', links, invbws=invbws, remote_invbw=remote_invbw, remote_alpha=remote_alpha, remote_beta=remote_beta)
 
 def nvlink_only(nvidia_smi_topo=None):
     if nvidia_smi_topo == None:

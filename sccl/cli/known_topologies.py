@@ -20,7 +20,10 @@ class KnownTopologies:
             'AMD4': self._fixed_topo(topologies.amd4),
             'AMD8': self._fixed_topo(topologies.amd8),
             'DGX1': self._fixed_topo(topologies.dgx1),
-            'DGX2': self._fixed_topo(lambda: topologies.hub_and_spoke(16)),
+            'DGX1Lat': self._fixed_topo(topologies.dgx1_lat),
+            'DGX2': self._fixed_topo(lambda: topologies.hub_and_spoke_nvswitch(16,6,46,107,2.6,105,"DGX2")),
+            'DGX2Single': self._fixed_topo(lambda: topologies.hub_and_spoke_nvswitch(16,1,8,107,2.6,105,"DGX2Single")),
+            'A100': self._fixed_topo(lambda: topologies.hub_and_spoke_nvswitch(16,6,46,107,2.6,105,"A100")),
             'NVLinkOnly': self._fixed_topo(topologies.nvlink_only),
             'custom': self._custom_topo(),
         }

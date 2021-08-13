@@ -12,6 +12,19 @@ def hub_and_spoke(num_nodes):
         switches.append((others,[node],1,f'node_{node}_in'))
     return Topology(f'HubAndSpoke(n={num_nodes})', links, switches)
 
+def hub_and_spoke_nvswitch(num_nodes, num_switches, invbw, remote_invbw, remote_alpha, remote_beta, name):
+    links = [[0 if x==y else num_switches for y in range(num_nodes)] for x in range(num_nodes)]
+    invbws = [[0 if x==y else invbw for y in range(num_nodes)] for x in range(num_nodes)]
+    switches = []
+    for i in range(num_switches):
+        swt = []
+        for node in range(num_nodes):
+            others = [other for other in range(num_nodes) if other != node]
+            swt.append(([node],others,1,invbw,f'node_{node}_out'))
+            swt.append((others,[node],1,invbw,f'node_{node}_in'))
+        switches.append(swt)
+    return Topology(f'HubAndSpoke{name}(n={num_nodes})', links, switches, invbws=invbws, remote_invbw=remote_invbw, remote_alpha=remote_alpha, remote_beta=remote_beta)
+
 def fully_connected(num_nodes):
     links = []
     for i in range(num_nodes):
