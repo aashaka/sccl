@@ -94,9 +94,14 @@ def _analyze_liveness(gpus, algorithm):
 
     # For each step of the algorithm, update liveness intervals for all buffers
     for step_idx, step in enumerate(algorithm.steps):
-        for addr, src, dst in step.sends:
-            update_liveness(src, addr, step_idx)
-            update_liveness(dst, addr, step_idx)
+        if len(step.sends[0]) == 5:
+            for addr, src, dst, _, _ in step.sends:
+                update_liveness(src, addr, step_idx)
+                update_liveness(dst, addr, step_idx)
+        else:
+            for addr, src, dst in step.sends:
+                update_liveness(src, addr, step_idx)
+                update_liveness(dst, addr, step_idx)
     
     return (input_livenesses, output_livenesses, scratch_livenesses)
 
@@ -264,7 +269,19 @@ def _allocate_channels_max_concurrency(op_sets, logging):
 
     return ops_by_channel
 
-def _allocate_channels_match_topology(op_sets, topology, instances, logging):
+# Hack
+def _is_relay_link(topology, src, dst):
+    num_copies = topology.name.split(",")[1].strip(")")
+    if "copies=" in num_copies:
+        copies = int(num_copies[7:])
+    else:
+        copies = 1
+    num_local = len(topology.links) // copies
+    if src // num_local != dst // num_local:
+        return True
+    return False
+
+def _allocate_channels_match_topology(op_sets, topology, instances, scale_remote, logging):
     if len(topology.switches) > 0 and logging:
         print('Warning: Switches in the topology are ignored for the channel policy MatchTopology.')
 
@@ -277,6 +294,8 @@ def _allocate_channels_match_topology(op_sets, topology, instances, logging):
         dst = send.peer
         ops_by_channel[next_channel[(src,dst)]].extend(op_set)
         link = topology.link(src,dst) * instances
+        if _is_relay_link(topology, src, dst):
+            link = link * scale_remote
         assert link > 0, 'Encountered send on non-existent link'
         next_channel[(src,dst)] = (next_channel[(src,dst)] + 1) % link
 
@@ -290,7 +309,7 @@ class ChannelPolicy(Enum):
     def __str__(self):
         return self.value
 
-def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchTopology, pretty_print = True, old_format=False, use_scratch=False, merge_contiguous=True, instances=1, logging=False):
+def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchTopology, pretty_print = True, old_format=False, use_scratch=False, merge_contiguous=True, instances=1, scale_remote=1, combine_contig=False, add_time_deps=False, aid_IB_contig=False, logging=False):
     '''
     Generate the XML format used by the NCCL SCCL backend.
 
@@ -337,10 +356,40 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         if not (addr in gpu.inputs or addr in gpu.outputs or addr in gpu.scratch):
             offset = len(gpu.scratch)
             gpu.scratch[addr] = offset
+
+    # longest_relay = [0]*len(algorithm.steps)
+    # for i, step in enumerate(algorithm.steps):
+    #     if len(step.sends[0]) == 5:
+    #         for addr, src, dst, _, _ in step.sends:
+    #             if _is_relay_link(algorithm.topology,src,dst):
+    #                 longest_relay[i] += 1
+
+    if aid_IB_contig:
+        # first add scratch for relay sends only
+        for step in algorithm.steps:
+        # for s, cnt1 in sorted(list(enumerate(longest_relay)), key=lambda x:x[1], reverse=True):
+            # step = algorithm.steps[s]
+            if len(step.sends[0]) == 5:
+                for addr, src, dst, _, _ in step.sends:
+                    if _is_relay_link(algorithm.topology,src,dst):
+                        allocate_scratch(gpus[src], addr)
+                        allocate_scratch(gpus[dst], addr)
+            else:
+                for addr, src, dst in step.sends:
+                    if _is_relay_link(algorithm.topology,src,dst):
+                        allocate_scratch(gpus[src], addr)
+                        allocate_scratch(gpus[dst], addr)
+
+    # next add for remaining steps
     for step in algorithm.steps:
-        for addr, src, dst in step.sends:
-            allocate_scratch(gpus[src], addr)
-            allocate_scratch(gpus[dst], addr)
+        if len(step.sends[0]) == 5:
+            for addr, src, dst, _, _ in step.sends:
+                allocate_scratch(gpus[src], addr)
+                allocate_scratch(gpus[dst], addr)
+        else:
+            for addr, src, dst in step.sends:
+                allocate_scratch(gpus[src], addr)
+                allocate_scratch(gpus[dst], addr)
 
     # Analyze liveness of indices in buffers and remap scratch into input/output as possible
     if remap_scratch:
@@ -348,8 +397,8 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         _remap_scratch_into_input_output(liveness, gpus, logging)
 
     # Sort scratch mappings in an attemp to make more of them contiguous (this is of course a heuristic).
-    for gpu in gpus.values():
-        gpu.scratch = { addr: idx for idx, addr in enumerate(sorted(gpu.scratch)) }
+    # for gpu in gpus.values():
+    #     gpu.scratch = { addr: idx for idx, addr in enumerate(sorted(gpu.scratch)) }
 
     def get_buffer_and_offset(gpu, addr):
         # Map an address to one of the named buffers
@@ -404,24 +453,41 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
     writers = defaultdict(list)
     # Track all the reads since the last write to each buffer index
     readers = defaultdict(list)
+    relays = defaultdict(list)
     for step_idx, step in enumerate(algorithm.steps):
         new_writers = defaultdict(list)
         new_readers = defaultdict(list)
 
         # Group sent addresses by edge
         grouped_sends = defaultdict(set)
-        for addr, src, dst in step.sends:
-            grouped_sends[(src,dst)].add(addr)
+        if len(step.sends[0]) == 5:
+            for addr, src, dst, t, l in step.sends:
+                if combine_contig:
+                    grouped_sends[(src,dst)].add(addr)
+                else:
+                    grouped_sends[(src,dst,t,l)].add(addr)
+        else:
+            for addr, src, dst in step.sends:
+                grouped_sends[(src,dst)].add(addr)
 
         # Combine sends into intervals and create multiple instances if necessary
         sends = []
-        for (src, dst), addrs in grouped_sends.items():
-            for src_buf, src_off, dst_buf, dst_off, cnt in make_intervals(src, dst, addrs):
-                for i in range(instances):
-                    new_src_off = src_off * instances + i * cnt
-                    new_dst_off = dst_off * instances + i * cnt
-                    send = (src, dst, src_buf, new_src_off, dst_buf, new_dst_off, cnt)
-                    sends.append(send)
+        if combine_contig or len(step.sends[0])!=5:
+            for (src, dst), addrs in grouped_sends.items():
+                for src_buf, src_off, dst_buf, dst_off, cnt in make_intervals(src, dst, addrs):
+                    for i in range(instances):
+                        new_src_off = src_off * instances + i * cnt
+                        new_dst_off = dst_off * instances + i * cnt
+                        send = (src, dst, src_buf, new_src_off, dst_buf, new_dst_off, cnt)
+                        sends.append(send)
+        else:
+            for (src, dst,_,_), addrs in grouped_sends.items():
+                for src_buf, src_off, dst_buf, dst_off, cnt in make_intervals(src, dst, addrs):
+                    for i in range(instances):
+                        new_src_off = src_off * instances + i * cnt
+                        new_dst_off = dst_off * instances + i * cnt
+                        send = (src, dst, src_buf, new_src_off, dst_buf, new_dst_off, cnt)
+                        sends.append(send)
 
         # Perform dependency tracking and create _Op instances
         for src, dst, src_buf, src_off, dst_buf, dst_off, cnt in sends:
@@ -432,12 +498,23 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
             write_keys = [(dst,dst_buf,dst_off+i) for i in range(cnt)]
             # A receive must wait for both the previous recv and any previous sends to finish
             recv_depends = list(set(d for deps in (readers, writers) for k in write_keys for d in deps[k]))
+            # print(send_depends)
+            # print(recv_depends)
+            if add_time_deps:
+                if _is_relay_link(algorithm.topology, src, dst):
+                    if dst in relays:
+                        d, src_last = relays[dst]
+                        if src_last != src:
+                            recv_depends.append(d)
 
             send_op = _Op(src, dst, step_idx, True, 's', src_buf, src_off, dst_buf, dst_off, cnt, send_depends)
             recv_op = _Op(dst, src, step_idx, False, 'r', src_buf, src_off, dst_buf, dst_off, cnt, recv_depends)
             # Record the send and receive as a set of operations that must happen on the same channel
             op_sets.append([send_op, recv_op])
 
+            if add_time_deps:
+                if _is_relay_link(algorithm.topology, src, dst):
+                    relays[dst] = (recv_op,src)
             # Mark writers and readers to be added for the next step
             for k in write_keys:
                 new_writers[k].append(recv_op)
@@ -480,7 +557,7 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
     elif channel_policy == ChannelPolicy.MaxConcurrency:
         ops_by_channel = _allocate_channels_max_concurrency(op_sets, logging)
     elif channel_policy == ChannelPolicy.MatchTopology:
-        ops_by_channel = _allocate_channels_match_topology(op_sets, algorithm.topology, instances, logging)
+        ops_by_channel = _allocate_channels_match_topology(op_sets, algorithm.topology, instances, scale_remote, logging)
     else:
         assert False, 'Unhandled channel policy'
 
@@ -562,6 +639,8 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
     algo_elem.set('nchannels', str(1 + max(max(tb.channel for tb in gpu.threadblocks) for gpu in gpus.values())))
     if old_format:
         algo_elem.set('nchunksperloop', str(max(max(gpu.input_chunks, gpu.output_chunks) for gpu in gpus.values())))
+        algo_elem.set('proto', "Simple")
+        algo_elem.set('ngpus', str(len(gpus)))
     for rank, gpu in gpus.items():
         gpu_elem = ET.SubElement(algo_elem, 'gpu')
         gpu_elem.set('id', str(rank))

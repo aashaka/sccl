@@ -17,7 +17,12 @@ def _sccl_object_hook(o):
         output_map = { int(k): set(v) for k, v in o['output_map'].items() }
         return Algorithm(o['name'], o['collective'], o['topology'], o['instance'], o['steps'], input_map, output_map)
     if o['sccl_type'] == 'step':
-        sends = [(addr, src, dst) for addr, src, dst in o['sends']]
+        if len(o['sends'][0]) == 5:
+            sends = [(addr, src, dst,t,l) for addr, src, dst, t,l in o['sends']]
+        elif len(o['sends'][0]) == 4:
+            sends = [(addr, src, dst,t) for addr, src, dst, t in o['sends']]
+        else:
+            sends = [(addr, src, dst) for addr, src, dst in o['sends']]
         return Step(o['rounds'], sends)
     if o['sccl_type'] == 'collective':
         triggers = { (int(r), int(c)): v for r, rmap in o['triggers'].items() for c, v in rmap.items() }

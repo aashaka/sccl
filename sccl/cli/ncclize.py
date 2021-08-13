@@ -13,10 +13,15 @@ def make_handle_ncclize(cmd_parsers):
     remap_scratch_grp.add_argument('--no-remap-scratch', action='store_false', dest='remap_scratch', help='don\'t remap scratch buffer indices into free input/output indices')
     cmd.add_argument('--no-merge-contiguous', action='store_true', help='don\'t merge sends/receives from/to contiguous memory')
     cmd.add_argument('--no-pretty-print', action='store_true', help='don\'t pretty print the generated XML')
+    cmd.add_argument('--extra-contig', action='store_true', help='allow lucky contiguity')
+    cmd.add_argument('--time-deps', action='store_true', help='add dependency between relay sends')
     cmd.add_argument('--old-format', action='store_true', help='use the old format')
     cmd.add_argument('--use-scratch', action='store_true', help='use the scratch buffer instead of extra space at the end of output buffer')
     cmd.add_argument('--channel-policy', type=ChannelPolicy, choices=list(ChannelPolicy), default=ChannelPolicy.MatchTopology, help='channel allocation policy')
     cmd.add_argument('--instances', type=int, default=1, help='number of interleaved instances of the algorithm to make')
+    cmd.add_argument('--scale-remote', type=int, default=1, help='number of interleaved instances of the algorithm to make more for IB')
+    cmd.add_argument('--prefix', type=str, default="", help='prefix to add to xmlfile')
+    cmd.add_argument('--aid-IB-contig', action="store_true", help='sort scratch buffers of IB send first in order to aid its contiguous send')
 
     def handle(args, command):
         if command != 'ncclize':
@@ -34,9 +39,23 @@ def make_handle_ncclize(cmd_parsers):
                 use_scratch=args.use_scratch,
                 merge_contiguous=not args.no_merge_contiguous,
                 instances=args.instances,
+                scale_remote=args.scale_remote,
+                combine_contig=args.extra_contig,
+                add_time_deps=args.time_deps,
+                aid_IB_contig=args.aid_IB_contig,
                 logging=True)
 
-            handled = output_handler(args, lambda: ncclized, name_sccl_object(algo.name, ending='sccl.xml'))
+            algo_name = algo.name.replace("[",".")
+            algo_name = algo_name.replace("]","")
+            algo_name = algo_name.replace(" ","")
+            suffix = ""
+            if args.extra_contig:
+                suffix += "_extraContig"
+            if args.time_deps:
+                suffix += "_timeDeps"
+            if args.aid_IB_contig:
+                suffix += "_IBContig"
+            handled = output_handler(args, lambda: ncclized, name_sccl_object(algo_name + f"_i{args.instances}_scRemote{args.scale_remote}{suffix}{args.prefix}", ending='sccl.xml'))
 
         return True
     
