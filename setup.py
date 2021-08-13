@@ -17,6 +17,8 @@ setup(
         'z3-solver',
         'argcomplete',
         'lxml',
+        'gurobipy',
+        'numpy'
     ],
     python_requires='>=3.6',
 )
